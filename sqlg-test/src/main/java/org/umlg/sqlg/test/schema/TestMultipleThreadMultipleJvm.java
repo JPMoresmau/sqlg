@@ -140,6 +140,92 @@ public class TestMultipleThreadMultipleJvm extends BaseTest {
             }
         }
     }
+    
+    @Test
+    public void testMultiThreadedSchemaCreationData() throws Exception {
+        //number graphs, pretending its a separate jvm
+        int NUMBER_OF_GRAPHS = 10;
+        int NUMBER_OF_LABELS = 100;
+        //Pre-create all the graphs
+        List<SqlgGraph> graphs = new ArrayList<>();
+        for (int i = 0; i < NUMBER_OF_GRAPHS; i++) {
+            graphs.add(SqlgGraph.open(configuration));
+        }
+        logger.info(String.format("Done firing up %d graphs", NUMBER_OF_GRAPHS));
+
+        ExecutorService poolPerGraph = Executors.newFixedThreadPool(NUMBER_OF_GRAPHS);
+        CompletionService<SqlgGraph> poolPerGraphsExecutorCompletionService = new ExecutorCompletionService<>(poolPerGraph);
+        try {
+
+            List<Future<SqlgGraph>> results = new ArrayList<>();
+            int i=0;
+            for (final SqlgGraph sqlgGraphAsync : graphs) {
+            	final int fi=i;
+                results.add(
+                        poolPerGraphsExecutorCompletionService.submit(() -> {
+                                    try {
+                                    	if (fi%2==0) {
+	                                        Schema s=sqlgGraphAsync.getTopology().ensureSchemaExist("schema_" + fi);
+	                                        Map<String,PropertyType> props=new HashMap<>();
+	                                        props.put("name", PropertyType.STRING);
+	                                        for (int a=0;a<NUMBER_OF_LABELS;a++) {
+	                                        	s.ensureVertexLabelExist("vertex_"+a,props);
+	                                        }
+	                                        sqlgGraphAsync.tx().commit();
+	                                        for (int a=0;a<NUMBER_OF_LABELS*10;a++) {
+	                                        	sqlgGraphAsync.addVertex(T.label,s.getName()+".vertex_0","name","vertex_0_"+a);
+	                                        }
+	                                        sqlgGraphAsync.tx().commit();
+	                                        for (int a=0;a<NUMBER_OF_LABELS*10;a++) {
+	                                        	sqlgGraphAsync.addVertex(T.label,s.getName()+".vertex_1","name","vertex_0_"+a);
+	                                        }
+	                                        sqlgGraphAsync.tx().commit();
+                                    	} else {
+                                    		 for (int a=0;a<NUMBER_OF_LABELS*10;a++) {
+ 	                                        	sqlgGraphAsync.addVertex(T.label,"schema_" + fi+".vertex_0","name","vertex_0_"+a);
+ 	                                        }
+ 	                                        sqlgGraphAsync.tx().commit();
+ 	                                        for (int a=0;a<NUMBER_OF_LABELS*10;a++) {
+	                                        	sqlgGraphAsync.addVertex(T.label,"schema_" + fi+".vertex_1","name","vertex_0_"+a);
+	                                        }
+	                                        sqlgGraphAsync.tx().commit();
+ 	                                        Schema s=sqlgGraphAsync.getTopology().ensureSchemaExist("schema_" + fi);
+	                                        Map<String,PropertyType> props=new HashMap<>();
+	                                        props.put("name", PropertyType.STRING);
+	                                        for (int a=0;a<NUMBER_OF_LABELS;a++) {
+	                                        	s.ensureVertexLabelExist("vertex_"+a,props);
+	                                        }
+	                                        sqlgGraphAsync.tx().commit();
+                                    	}
+                                    } catch (Exception e) {
+                                        sqlgGraphAsync.tx().rollback();
+                                        throw new RuntimeException(e);
+                                    }
+                                    
+                                    return sqlgGraphAsync;
+                                }
+                        )
+                );
+                i++;
+            }
+            poolPerGraph.shutdown();
+
+            for (Future<SqlgGraph> result : results) {
+                result.get(100, TimeUnit.SECONDS);
+            }
+            Thread.sleep(1000);
+            for (SqlgGraph graph : graphs) {
+                assertEquals(this.sqlgGraph.getTopology(), graph.getTopology());
+                for (Schema schema : graph.getTopology().getSchemas()) {
+                    assertTrue(schema.isCommitted());
+                }
+            }
+        } finally {
+            for (SqlgGraph graph : graphs) {
+                graph.close();
+            }
+        }
+    }
 
     @Test
     public void testMultiThreadedSchemaCreation2() throws Exception {

@@ -1,5 +1,26 @@
 package org.umlg.sqlg.test.schema;
 
+import static java.util.concurrent.Executors.newFixedThreadPool;
+import static org.junit.Assert.fail;
+
+import java.net.URL;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListSet;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+
 import org.apache.commons.configuration.ConfigurationException;
 import org.apache.commons.configuration.PropertiesConfiguration;
 import org.apache.tinkerpop.gremlin.structure.Edge;
@@ -11,20 +32,10 @@ import org.junit.Assume;
 import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.umlg.sqlg.structure.PropertyType;
 import org.umlg.sqlg.structure.SqlgGraph;
+import org.umlg.sqlg.structure.topology.Schema;
 import org.umlg.sqlg.test.BaseTest;
-
-import java.net.URL;
-import java.util.HashSet;
-import java.util.Random;
-import java.util.Set;
-import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Consumer;
-
-import static java.util.concurrent.Executors.newFixedThreadPool;
-import static org.junit.Assert.fail;
 
 /**
  * Date: 2014/09/24
@@ -222,14 +233,17 @@ public class TestMultiThread extends BaseTest {
     public void testMultiThreadCreateSchemas() throws InterruptedException, ExecutionException {
         Set<Integer> schemas = new HashSet<>();
         ExecutorService executorService = newFixedThreadPool(200);
-        for (int i = 0; i < 10_000; i++) {
+        List<Future<?>> fs=new LinkedList<>(); 
+        for (int i = 0; i < 100; i++) {
             Integer schema = new Random().nextInt(99);
             schemas.add(schema);
-            Future<?> f = executorService.submit(() -> {
+            fs.add(executorService.submit(() -> {
                 this.sqlgGraph.getTopology().ensureSchemaExist("schema_" + schema);
                 this.sqlgGraph.tx().commit();
-            });
-            f.get();
+            }));
+        }
+        for (Future<?> f:fs) {
+        	f.get();
         }
         executorService.shutdown();
         executorService.awaitTermination(5, TimeUnit.SECONDS);
@@ -237,6 +251,39 @@ public class TestMultiThread extends BaseTest {
         Assert.assertEquals(schemas.size() + 2, this.sqlgGraph.getTopology().getSchemas().size());
     }
 
+    @Test
+    public void testMultiThreadCreateSchemasAndVertices() throws InterruptedException, ExecutionException {
+        Set<Integer> schemas = new HashSet<>();
+        ExecutorService executorService = newFixedThreadPool(200);
+        List<Future<?>> fs=new LinkedList<>(); 
+        for (int i = 0; i < 10; i++) {
+        	Integer schema = new Random().nextInt(99);
+            schemas.add(schema);
+            fs.add(executorService.submit(() -> {
+                Schema s=this.sqlgGraph.getTopology().ensureSchemaExist("schema_" + schema);
+                Map<String,PropertyType> props=new HashMap<>();
+                props.put("name", PropertyType.STRING);
+                for (int a=0;a<100;a++) {
+                	s.ensureVertexLabelExist("vertex_"+a,props);
+                }
+                this.sqlgGraph.tx().commit();
+                for (int a=0;a<1000;a++) {
+                	this.sqlgGraph.addVertex(T.label,s.getName()+".vertex_0","name","vertex_0_"+a);
+                }
+                this.sqlgGraph.tx().commit();
+            }));
+        }
+        for (Future<?> f:fs) {
+        	f.get();
+        }
+        executorService.shutdown();
+        executorService.awaitTermination(5, TimeUnit.SECONDS);
+        //+ 1 for the public schema and gui_schema i.e. globalUniqueIndex
+        Assert.assertEquals(schemas.size() + 2, this.sqlgGraph.getTopology().getSchemas().size());
+    }
+
+    
+    
     /**
      * test when each graph is created in its own thread, in distributed mode
      *
